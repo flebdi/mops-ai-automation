@@ -103,41 +103,64 @@ Skip to next task. Do NOT run a2 yet.
 
 ---
 
-### STEP 3 — a2: Build Salesforce campaign
+### STEP 3 — a2: Prepare Salesforce campaign spec
 Only run this after the owner has confirmed the generated name in STEP 2b.
 
-**Create the SF campaign:**
-```
-node scripts/salesforce.mjs create-campaign \
-  --name "[approvedName]" \
-  --type "[type]" \
-  --region "[region]" \
-  --go-live "[goLiveDate]" \
-  --budget "[budget]" \
-  --owner "[owner]"
-```
-Read the JSON output: `{ sfCampaignId: "..." }` on success or `{ error: "...", code: "..." }` on failure.
+**Current constraint: read-only Salesforce access.**
+Claude cannot create SF records directly. Instead, prepare a complete campaign spec and hand it
+off to the SF admin via Asana. The pipeline resumes once the admin replies with the Campaign ID.
 
-**Self-correction on failure**:
-- Field validation error → adjust the offending field value and retry once
-- Auth error → token expired; the script handles refresh automatically, retry once
-- Duplicate error → SF campaign may already exist; search before creating, return existing ID
-- If fails twice → add Asana comment with the error, run Slack alert, mark as `error` in state, skip to next task
+**Build the spec from the approved name and classification:**
+- Name: `[approvedName]`
+- Type: `[type]`
+- Region: `[region]` (custom field)
+- Start date / Go-live: `[goLiveDate]`
+- Budget: `[budget]`
+- Campaign owner: `[owner]`
+- Member statuses to add (read from `src/config/member-statuses.ts` for the type):
+  e.g. for Webinar → Registered, Attended, No Show, On-Demand View
 
-**Add member statuses:**
+**Verify the name doesn't already exist in SF (read-only check):**
 ```
-node scripts/salesforce.mjs add-member-statuses \
-  --campaign-id "[sfCampaignId]" \
-  --type "[type]"
+node scripts/salesforce.mjs find-campaign --name "[approvedName]"
 ```
+- If a match is returned → the campaign may already exist. Post to Asana asking the admin to confirm
+  whether to reuse or create a new one. Mark state `pending-sf-creation` and skip.
+- If no match → proceed to post the spec.
 
-**Create Pardot connected campaign (non-fatal):**
+**Post the spec to Asana:**
+Add comment:
+"MOps AI: Salesforce campaign ready to create.\n\n
+📋 **Campaign spec**\n
+• Name: `[approvedName]`\n
+• Type: [type]\n
+• Region: [region]\n
+• Go-live: [goLiveDate]\n
+• Budget: [budget]\n
+• Owner: [owner]\n\n
+**Member statuses to add after creation:**\n
+[bullet list of statuses for this type]\n\n
+Once created, reply with the SF Campaign ID (e.g. `7013x000001AbCd`) so I can continue. — MOps AI"
+
+Add `{ id, status: "pending-sf-creation", approvedName: "[approvedName]" }` to state.
+Skip to next task. Do NOT run a3/a4 yet.
+
+**For tasks already in state with status `pending-sf-creation`**:
+- Use Asana MCP to read recent comments on the task
+- If a comment contains a Salesforce Campaign ID (pattern: 18-char alphanumeric starting with `701`):
+  - Extract the ID
+  - Run: `node scripts/salesforce.mjs find-campaign --id "[sfCampaignId]"` to verify it exists
+  - Update state to `{ id, status: "sf-created", sfCampaignId: "[sfCampaignId]" }`
+  - Continue to STEP 4 (a3)
+- If no reply and less than 24 hours: skip
+- If no reply after 24 hours: run `node scripts/slack.mjs alert --message "SF campaign creation overdue: [task URL] — please create in Salesforce and reply with the Campaign ID"`
+
+**Pardot connected campaign (non-fatal, read-only check only for now):**
 ```
-node scripts/pardot.mjs create-campaign \
-  --sf-campaign-id "[sfCampaignId]" \
-  --name "[approvedName]"
+node scripts/pardot.mjs find-campaign --sf-campaign-id "[sfCampaignId]"
 ```
-If this fails, log the error and continue. Do not block a3/a4 for a Pardot failure.
+Log whether a Pardot connected campaign exists. Do not attempt to create one — note in the
+Asana comment that the SF admin should link it in Account Engagement after creating the campaign.
 
 ---
 

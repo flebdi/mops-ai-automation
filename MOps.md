@@ -50,7 +50,7 @@ a1 (triage)  →  a5 (naming GATE)  →  a2 (SF build)  →  a3 (assets)  →  a
 | # | Name | What it does | Key systems |
 |---|------|--------------|-------------|
 | a1 | Intake triage | Reads the form, classifies type & region, extracts fields, flags missing/contradictory data, routes to the regional owner, sets priority, confirms to requestor | Asana, Claude |
-| a2 | SF campaign + statuses | Creates the SF campaign (name, type, dates, budget), applies the member-status set for the type, links parent campaign, creates the Pardot connected campaign | Salesforce, Pardot |
+| a2 | SF campaign spec + hand-off | Prepares the complete SF campaign spec (name, type, dates, budget, member statuses) and posts it to Asana for the SF admin to create manually. Resumes once the admin replies with the Campaign ID. *(Read-only SF access — direct creation pending write credentials.)* | Salesforce (read), Asana |
 | a3 | Asset checklist + subtasks | Generates the per-type asset checklist and creates every Asana subtask | Asana, Claude |
 | a4 | Brief drafting | Turns intake into a one-page brief (objective, audience, messaging, KPIs, assets, timeline); attaches to the Asana task and SF campaign | Claude, Asana, Salesforce |
 | a5 | Name generator **(gate)** | Generates the canonical campaign name from intake fields (`Region_Type_Topic_Year_Quarter`), posts it to Asana for owner confirmation, and gates `a2` until approved | Claude |
@@ -165,7 +165,7 @@ Escalate if the owner does not respond within **24 hours**.
 - Idempotency is handled via **`state/processed-tasks.json`** — a JSON array of
   `{ id, status, approvedName?, sfCampaignId? }` objects. Claude reads this at the start of
   every run and skips tasks already marked `completed`.
-- Statuses: `flagged` | `pending-approval` | `approval-received` | `completed` | `error`.
+- Statuses: `flagged` | `pending-approval` | `approval-received` | `pending-sf-creation` | `sf-created` | `completed` | `error`.
 
 ### Human-in-the-loop
 - **Naming corrections**: Claude posts an Asana comment with the suggested fix, sets status to
@@ -209,8 +209,8 @@ mops-ai-automation/
 │   ├── intake-pipeline.md         # Claude Code routine: a1 → a5 gate → a2 → a3 → a4 (hourly)
 │   └── sync-watchdog.md           # Claude Code routine: a6 Pardot/SF sync check (daily + weekly)
 ├── scripts/                       # Node.js ESM scripts called via Bash from routines
-│   ├── salesforce.mjs             # create-campaign, add-member-statuses, list-active-campaigns
-│   ├── pardot.mjs                 # create-campaign, list-campaigns
+│   ├── salesforce.mjs             # find-campaign, list-active-campaigns (read-only; write pending credentials)
+│   ├── pardot.mjs                 # find-campaign, list-campaigns (read-only)
 │   ├── slack.mjs                  # alert
 │   └── airtable.mjs               # log, get-similar
 ├── state/
@@ -262,8 +262,11 @@ fast-follows. Don't let the watchdog or brief drafting block the core launch.
 - **Log every AI decision** to the audit store (Airtable) via `node scripts/airtable.mjs log`.
 - Secrets come from **environment variables only**; never commit real keys.
 - **Idempotency** is enforced by checking `state/processed-tasks.json` before processing any task.
-- **Human-in-the-loop:** naming corrections require an Asana comment approval before a2 runs.
-  Low-confidence triage is flagged and skipped — a human must clarify before the routine picks it up.
+- **Human-in-the-loop:** naming requires owner approval; SF creation requires an admin to create
+  the record and reply with the Campaign ID; low-confidence triage is flagged for human clarification.
+- **Salesforce access is currently read-only.** `scripts/salesforce.mjs` only runs `find-campaign`
+  and `list-active-campaigns`. When write credentials are available, add `create-campaign` and
+  `add-member-statuses` commands and remove the hand-off flow from a2.
 - Prefer **APIs and MCP over Playwright**; only drive a browser where no API exists.
 
 ---
